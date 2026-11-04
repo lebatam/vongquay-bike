@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Quản trị · Vòng Quay Bike</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Be+Vietnam+Pro:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<style>
+body{margin:0}img{max-width:100%}[hidden]{display:none!important}
+.login{max-width:380px;margin:48px auto;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:22px;display:flex;flex-direction:column;gap:12px}
+.login h1{font-size:32px;text-transform:uppercase}
+.login label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600}
+.login input{font:inherit;padding:9px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+.tabs{display:flex;gap:8px;padding-block:18px 14px}
+.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;padding-bottom:40px}
+.ph{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+.ph .pic{aspect-ratio:16/10;background:#fff;display:grid;place-items:center}
+.ph .pic img,.ph .pic svg{width:100%;height:100%;object-fit:contain}
+.ph .meta{padding:10px 12px;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.ph .upload{position:static;align-self:flex-start}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <div class="logo">Quản trị</div><div class="spacer"></div>
+  <a class="btn ghost" href="./" style="text-decoration:none">Xem cửa hàng</a>
+  <button class="btn ghost" id="logoutBtn" hidden>Đăng xuất</button>
+</div></header>
+
+<form class="login" id="loginForm" hidden>
+  <h1>Đăng nhập</h1>
+  <label for="email">Email<input id="email" type="email" autocomplete="username" required></label>
+  <label for="pass">Mật khẩu<input id="pass" type="password" autocomplete="current-password" required></label>
+  <p class="err" id="loginErr" hidden></p>
+  <button class="btn" id="loginBtn">Đăng nhập</button>
+</form>
+
+<main class="wrap" id="app" hidden>
+  <div class="tabs" role="group" aria-label="Mục quản trị">
+    <button class="chip" aria-pressed="true" data-tab="orders">Đơn hàng</button>
+    <button class="chip" aria-pressed="false" data-tab="photos">Ảnh sản phẩm</button>
+    <button class="chip" id="reloadBtn">Tải lại</button>
+  </div>
+  <section id="tab-orders" class="admin">
+    <div class="sum" id="adminSum" hidden></div>
+    <p id="adminState" class="empty">Đang tải đơn hàng…</p>
+    <div class="tbl" id="adminTbl" hidden>
+      <table><thead><tr><th>Thời gian</th><th>Khách hàng</th><th>Sản phẩm</th><th>Tổng</th><th>Trạng thái</th></tr></thead><tbody id="adminRows"></tbody></table>
+    </div>
+  </section>
+  <section id="tab-photos" hidden>
+    <p class="note">Ảnh tải lên sẽ thay ảnh đang hiển thị trên cửa hàng. Nên dùng ảnh nền trắng, khổ ngang, dưới 1 MB.</p>
+    <div class="photos" id="photoGrid"></div>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script src="products.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
+<script>
+const CFG=window.APP_CONFIG,PRODUCTS=window.PRODUCTS,bikeSVG=window.bikeSVG;
+const $=id=>document.getElementById(id);
+const vnd=n=>(n||0).toLocaleString("vi-VN")+"₫";
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const configured=!CFG.SUPABASE_URL.includes("XXXX")&&!CFG.SUPABASE_ANON_KEY.includes("DAN_");
+const sb=configured?window.supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_ANON_KEY):null;
+let orders=[],photos={};
+
+async function start(){
+  if(!sb){document.body.insertAdjacentHTML("beforeend",`<p class="wrap empty">Chưa cấu hình Supabase. Mở file config.js và dán Project URL cùng anon key.</p>`);return}
+  const {data:{session}}=await sb.auth.getSession();
+  session?showApp():showLogin();
+}
+function showLogin(){$("loginForm").hidden=false;$("app").hidden=true;$("logoutBtn").hidden=true}
+function showApp(){$("loginForm").hidden=true;$("app").hidden=false;$("logoutBtn").hidden=false;loadOrders();loadPhotos()}
+
+$("loginForm").addEventListener("submit",async e=>{
+  e.preventDefault();$("loginErr").hidden=true;$("loginBtn").disabled=true;
+  const {error}=await sb.auth.signInWithPassword({email:$("email").value.trim(),password:$("pass").value});
+  $("loginBtn").disabled=false;
+  if(error){$("loginErr").textContent="Sai email hoặc mật khẩu.";$("loginErr").hidden=false;return}
+  showApp();
+});
+$("logoutBtn").onclick=async()=>{await sb.auth.signOut();showLogin()};
+$("reloadBtn").onclick=()=>{loadOrders();loadPhotos()};
+document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("[data-tab]").forEach(x=>x.setAttribute("aria-pressed",x===b));
+  $("tab-orders").hidden=b.dataset.tab!=="orders";$("tab-photos").hidden=b.dataset.tab!=="photos";
+});
+
+/* ---------- Đơn hàng ---------- */
+async function loadOrders(){
+  const {data,error}=await sb.from("orders").select("*").order("created_at",{ascending:false});
+  if(error){$("adminState").hidden=false;$("adminState").textContent="Không đọc được đơn hàng: "+error.message;return}
+  orders=data||[];
+  if(orders.length===0&&!(await isAdmin())){$("adminState").hidden=false;$("adminState").textContent="Tài khoản này chưa được cấp quyền quản trị. Thêm email vào bảng admins (xem HUONG-DAN.md, bước 2).";return}
+  renderOrders();
+}
+async function isAdmin(){const {data}=await sb.from("admins").select("email");return !!(data&&data.length)}
+function renderOrders(){
+  const done=o=>o.status==="Đã giao";
+  const list=[...orders].sort((a,b)=>(done(a)-done(b))||b.created_at.localeCompare(a.created_at));
+  if(!list.length){$("adminState").hidden=false;$("adminState").textContent="Chưa có đơn hàng nào. Khi khách bấm Đặt hàng, đơn sẽ hiện ở đây.";$("adminTbl").hidden=true;$("adminSum").hidden=true;return}
+  $("adminState").hidden=true;$("adminTbl").hidden=false;$("adminSum").hidden=false;
+  const pend=list.filter(o=>!done(o)),dl=list.filter(done);
+  $("adminSum").innerHTML=`<div class="stat pend"><b>${pend.length}</b><span>Đang chờ giao</span><small>${vnd(pend.reduce((s,o)=>s+o.total,0))}</small></div>
+    <div class="stat dl"><b>${dl.length}</b><span>Đã giao</span><small>${vnd(dl.reduce((s,o)=>s+o.total,0))}</small></div>`;
+  $("adminRows").innerHTML=list.map(o=>`<tr class="${done(o)?"is-done":"is-pend"}">
+    <td class="num">${new Date(o.created_at).toLocaleString("vi-VN")}<br><small>${esc(o.code)}</small></td>
+    <td><strong>${esc(o.customer_name)}</strong><br>${esc(o.phone)}<br><small>${esc(o.address)}</small>${o.note?`<br><small>Ghi chú: ${esc(o.note)}</small>`:""}</td>
+    <td>${(o.items||[]).map(i=>`${esc(i.qty)}× ${esc(i.name)}`).join("<br>")}</td>
+    <td class="num">${vnd(o.total)}<br><small>${esc(o.payment)}</small></td>
+    <td><span class="pill ${done(o)?"done":"new"}">${done(o)?"✓ Đã giao":"● Chờ giao"}</span>
+      ${done(o)&&o.delivered_at?`<br><small>${new Date(o.delivered_at).toLocaleString("vi-VN")}</small>`:""}<br>
+      ${done(o)?`<button class="mini ghost" data-undo="${o.id}">Hoàn tác</button>`:`<button class="mini" data-deliver="${o.id}">Đánh dấu đã giao</button>`}
+      <span class="row-err" hidden>Không lưu được, thử lại</span></td></tr>`).join("");
+}
+$("adminRows").addEventListener("click",async e=>{
+  const t=e.target.closest("button");if(!t)return;
+  const id=+(t.dataset.deliver||t.dataset.undo),deliver=!!t.dataset.deliver,label=t.textContent;
+  t.disabled=true;t.textContent="Đang lưu…";
+  const {data,error}=await sb.from("orders").update({status:deliver?"Đã giao":"Mới",delivered_at:deliver?new Date().toISOString():null}).eq("id",id).select();
+  if(error||!data||!data.length){t.disabled=false;t.textContent=label;t.parentElement.querySelector(".row-err").hidden=false;return}
+  orders=orders.map(o=>o.id===id?data[0]:o);renderOrders();
+});
+
+/* ---------- Ảnh sản phẩm ---------- */
+async function loadPhotos(){
+  const {data}=await sb.from("product_photos").select("sku,url");
+  photos={};(data||[]).forEach(r=>photos[r.sku]=r.url);renderPhotos();
+}
+function renderPhotos(){
+  $("photoGrid").innerHTML=PRODUCTS.map(p=>{const src=photos[p.sku]||p.img;return `<div class="ph">
+    <div class="pic">${src?`<img src="${esc(src)}" alt="">`:bikeSVG(p)}</div>
+    <div class="meta"><strong>${esc(p.brand)} ${esc(p.name)}</strong><small>${photos[p.sku]?"Ảnh đã tải lên":p.img?"Ảnh có sẵn trong code":"Đang dùng hình minh họa"}</small>
+    <label class="upload" for="up-${p.sku}">${src?"Đổi ảnh":"Tải ảnh lên"}<input type="file" id="up-${p.sku}" accept="image/*" data-sku="${p.sku}"></label>
+    <span class="row-err" hidden></span></div></div>`}).join("");
+}
+$("photoGrid").addEventListener("change",async e=>{
+  const inp=e.target.closest("input[data-sku]");if(!inp||!inp.files[0])return;
+  const f=inp.files[0],sku=inp.dataset.sku,lab=inp.parentElement,err=lab.nextElementSibling;
+  if(f.size>3*1024*1024){err.textContent="Ảnh lớn hơn 3 MB, hãy nén nhỏ lại.";err.hidden=false;return}
+  lab.classList.add("busy");lab.firstChild.textContent="Đang tải…";
+  const path=`${sku}-${Date.now()}.${(f.name.split(".").pop()||"jpg").toLowerCase()}`;
+  const up=await sb.storage.from("bike-photos").upload(path,f,{contentType:f.type,upsert:false});
+  if(up.error){err.textContent="Tải ảnh thất bại: "+up.error.message;err.hidden=false;lab.classList.remove("busy");lab.firstChild.textContent="Thử lại";return}
+  const url=sb.storage.from("bike-photos").getPublicUrl(path).data.publicUrl;
+  const {error}=await sb.from("product_photos").upsert({sku,url,updated_at:new Date().toISOString()});
+  if(error){err.textContent="Lưu ảnh thất bại: "+error.message;err.hidden=false;lab.classList.remove("busy");return}
+  photos[sku]=url;renderPhotos();
+});
+
+start();
+</script>
+</body>
+</html>
